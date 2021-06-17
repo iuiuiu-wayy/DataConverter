@@ -1,1 +1,1 @@
-from Converter import CRIC
+from .Converter import CRIC
