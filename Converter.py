@@ -2,6 +2,10 @@ import pandas as pd
 import numpy as np
 from datetime import date
 import os
+import xarray
+import geopandas as gpd
+import rioxarray
+from shapely.geometry import mapping
 
 class CRIC():
     def __init__(self):
@@ -15,7 +19,64 @@ class CRIC():
         self.m_rrs = []
         self.m_tavgs = []
         self.n_stations = 0
+        self.cities ={
+            'Banjarmasin': [-3.26,  -3.37, 114.54 , 114.65],
+            'Pangkalpinang': [-2.07,  -2.16, 106.06, 106.18],
+            'Ternate1' : [0.921, 0.747, 127.288, 127.395],
+            'Ternate2' : [0.482, 0.431, 127.38, 127.441],
+            'Ternate3' : [1.354, 1.279, 126.356, 126.417],
+            'Ternate4' : [0.99, 0.955, 126.126, 126.163],
+            # 'Ternate': [1.36, 0.43, 126.12, 127.44],
+            'Bandar Lampung': [-5.33, -5.53, 105.18, 105.35],
+            'Mataram':[-8.55,  -8.62 ,116.06, 116.16],
+            'Samarinda': [0.71, 0.3, 117.04, 117.31],            
+            'Pekanbaru': [0.61, 0.41, 101.36, 101.52],
+            'Gorontalo': [0.6, 0.5, 123.0, 123.08],
+            'Cirebon': [-6.68, -6.8, 108.51, 108.59],
+            'Kupang': [-10.12, -10.22, 123.54, 123.68]
+        }
+        self.GDRIVELOC = '/content/drive/MyDrive/Bahan Pelatihan/DataIklimEkstrim/CityECI2'
+        self.SHPDir = '/content/drive/MyDrive/Bahan Pelatihan/DataIklimEkstrim/SHPs'
     
+    def add_chirps_data(self, city):
+        nc_filename = 'Merged_'+city+'.nc'
+        with xarray.open_dataset(os.path.join(self.GDRIVELOC, nc_filename)) as dataset:
+            obs_data = dataset['precip']
+        shp = gpd.read_file(os.path.join(self.SHPDir, city + '.shp'))
+
+        obs_data.rio.set_spatial_dims(x_dim="x", y_dim="y", inplace=True)
+        obs_data.rio.write_crs("epsg:4326", inplace=True)
+
+        clipped = obs_data.rio.clip(shp[shp.NAMOBJ=='Kota '+city].geometry.apply(mapping), shp[shp.NAMOBJ=='Kota '+city].crs, drop=False)
+
+
+        for i in range(len(obs_data.x.values)):
+            for j in range(len(obs_data.y.values)):
+                self.inputfile = clipped.isel(x=i, y=j).to_pandas()
+
+                S_no_nan = self.inputfile[~np.isnan(self.inputfile)]
+                N = len(self.inputfile)
+                N2 = len(S_no_nan)
+                if not ((N2/N) < 0.3): 
+
+                    # self.inputfile.index = pd.to_datetime(self.inputfile.index, format='%d-%m-%Y')
+                    print(self.inputfile.head())
+                    # meta = pd.read_excel(filepath, usecols='A:B', header=None)
+                    self.WMOID = 'Chirps_i' + str(i)+ 'j'+str(j)
+                    self.STATION = 'Chirps_i' + str(i)+ 'j'+str(j)
+                    self.LATITUDE = obs_data.y.values[j]
+                    self.LONGITUDE = obs_data.x.values[i]
+                    self.ALTITUDE = np.nan
+                    print('WMOID :', self.WMOID)
+                    print('NAMA STASIUN :', self.STATION)
+                    print('lintang/buur :', self.LONGITUDE, '/', self.LATITUDE)
+                    print('Ketinggian :', self.ALTITUDE)
+                    print('Jumlah data kosong / jumlah data (Curah Hujan): ', self.inputfile.isna().sum(), '/', len(self.inputfile))
+                    # print('Jumlah data kosong / jumlah data (Suhu udara rata-rata): ', self.inputfile['Tavg'].isna().sum(), '/', len(self.inputfile['Tavg']))
+                    # return self.inputfile
+                    # self.daily2monnthly()
+                    self.dfRR = self.inputfile.resample('M').sum()
+                    self.add_to_stations(fromChirps=True)
 
     def read_excel(self, filepath):
         self.inputfile = pd.read_excel(filepath, 
@@ -40,7 +101,7 @@ class CRIC():
         self.daily2monnthly()
         self.add_to_stations()
 
-    def add_to_stations(self):
+    def add_to_stations(self, fromChirps=False):
         self.altitudes.append(self.ALTITUDE)
         self.ALTITUDE = None
         self.longitudes.append(self.LONGITUDE)
@@ -57,9 +118,11 @@ class CRIC():
         self.m_rrs.append(self.dfRR)
         self.dfRR = None
 
-        self.dfT = self.dfT.rename('Tavg'+str(self.WMOID))
-        self.m_tavgs.append(self.dfT)
-        self.dfT = None
+        if not fromChirps:
+            self.dfT = self.dfT.rename('Tavg'+str(self.WMOID))
+            self.m_tavgs.append(self.dfT)
+            self.dfT = None
+
         self.n_stations = self.n_stations + 1
         self.wmoids.append(self.WMOID)
         self.WMOID = None
@@ -169,13 +232,13 @@ class CRIC():
         return S.quantile(q=0.95)
 
     def calculateIndices(self, S):
-        self.data_cdd = self.inputfile['RR'].resample('Y').agg(C.CDD)
-        self.data_cwd = self.inputfile['RR'].resample('Y').agg(C.CWD)
-        self.data_rx1day = self.inputfile['RR'].resample('Y').agg(C.rx1day)
-        self.data_rx3day = self.inputfile['RR'].resample('Y').agg(C.rx3day)
-        self.data_rx5day = self.inputfile['RR'].resample('Y').agg(C.rx5day)
-        self.data_r20mm = self.inputfile['RR'].resample('Y').agg(C.r20mm)
-        self.data_Prec95p = self.inputfile['RR'].resample('Y').agg(C.Prec95p)
+        self.data_cdd = self.inputfile['RR'].resample('Y').agg(self.CDD)
+        self.data_cwd = self.inputfile['RR'].resample('Y').agg(self.CWD)
+        self.data_rx1day = self.inputfile['RR'].resample('Y').agg(self.rx1day)
+        self.data_rx3day = self.inputfile['RR'].resample('Y').agg(self.rx3day)
+        self.data_rx5day = self.inputfile['RR'].resample('Y').agg(self.rx5day)
+        self.data_r20mm = self.inputfile['RR'].resample('Y').agg(self.r20mm)
+        self.data_Prec95p = self.inputfile['RR'].resample('Y').agg(self.Prec95p)
 
     # def generate_sibias_input(self, S, outfile):
     #     print('SiBiaS input untuk '+str(self.n_stations) + ' akan dibuat')
